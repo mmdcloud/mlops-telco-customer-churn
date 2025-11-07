@@ -71,6 +71,37 @@ module "lb" {
 }
 
 # -----------------------------------------------------------------------------------------
+# Autoscaling configuration
+# -----------------------------------------------------------------------------------------
+module "autoscaling_policy" {
+  source                    = "./modules/autoscaling"
+  min_capacity              = 2
+  max_capacity              = 10
+  target_resource_id        = "service/${aws_ecs_cluster.carshub_cluster.name}/${module.carshub_frontend_ecs.name}"
+  target_scalable_dimension = "ecs:service:DesiredCount"
+  target_service_namespace  = "ecs"
+  policies = [
+    {
+      name                    = "autoscaling-policy"
+      adjustment_type         = "ChangeInCapacity"
+      cooldown                = 60
+      metric_aggregation_type = "Average"
+      steps = [
+        {
+          metric_interval_lower_bound = 0
+          metric_interval_upper_bound = 20
+          scaling_adjustment          = 1
+        },
+        {
+          metric_interval_lower_bound = 20
+          scaling_adjustment          = 2
+        }
+      ]
+    }
+  ]
+}
+
+# -----------------------------------------------------------------------------------------
 # ECR configuration
 # -----------------------------------------------------------------------------------------
 module "container_registry" {
@@ -78,7 +109,7 @@ module "container_registry" {
   force_delete         = true
   scan_on_push         = false
   image_tag_mutability = "IMMUTABLE"
-  bash_command         = "bash ${path.cwd}/../../../../../src/frontend/artifact_push.sh serving-repo ${var.region} http://${module.lb.lb_dns_name} ${module.media_cloudfront_distribution.domain_name}"
+  bash_command         = "bash ${path.cwd}/../src/frontend/artifact_push.sh serving-repo ${var.region} http://${module.lb.lb_dns_name} ${module.media_cloudfront_distribution.domain_name}"
   name                 = "serving-repo"
 }
 
@@ -99,7 +130,7 @@ module "ecs" {
   }
   autoscaling_capacity_providers = {
     ASG = {
-      auto_scaling_group_arn         = module.autoscaling.autoscaling_group_arn
+      auto_scaling_group_arn         = module.autoscaling.arn
       managed_draining               = "ENABLED"
       managed_termination_protection = "ENABLED"
       managed_scaling = {
