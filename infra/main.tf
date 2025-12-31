@@ -20,6 +20,70 @@ module "vpc" {
   }
 }
 
+module "lb_sg" {
+  source = "./modules/security-groups"
+  name   = "lb-sg"
+  vpc_id = module.vpc.vpc_id
+  ingress_rules = [
+    {
+      description     = "HTTP Traffic"
+      from_port       = 80
+      to_port         = 80
+      protocol        = "tcp"
+      security_groups = []
+      cidr_blocks     = ["0.0.0.0/0"]
+    },
+    {
+      description     = "HTTPS Traffic"
+      from_port       = 443
+      to_port         = 443
+      protocol        = "tcp"
+      security_groups = []
+      cidr_blocks     = ["0.0.0.0/0"]
+    }
+  ]
+  egress_rules = [
+    {
+      description = "Allow all outbound traffic"
+      from_port   = 0
+      to_port     = 0
+      protocol    = "-1"
+      cidr_blocks = ["0.0.0.0/0"]
+    }
+  ]
+  tags = {
+    Project     = "mlops-telco-customer-churn"
+  }
+}
+
+module "ecs_sg" {
+  source = "./modules/security-groups"
+  name   = "ecs-sg"
+  vpc_id = module.vpc.vpc_id
+  ingress_rules = [
+    {
+      description     = "HTTP Traffic"
+      from_port       = 80
+      to_port         = 80
+      protocol        = "tcp"
+      security_groups = [module.lb_sg.id]
+      cidr_blocks     = []
+    }
+  ]
+  egress_rules = [
+    {
+      description = "Allow all outbound traffic"
+      from_port   = 0
+      to_port     = 0
+      protocol    = "-1"
+      cidr_blocks = ["0.0.0.0/0"]
+    }
+  ]
+  tags = {
+    Project     = "mlops-telco-customer-churn"
+  }
+}
+
 # -----------------------------------------------------------------------------------------
 # Load Balancer Configuration
 # -----------------------------------------------------------------------------------------
@@ -74,29 +138,33 @@ module "lb" {
 # Autoscaling configuration
 # -----------------------------------------------------------------------------------------
 module "autoscaling_policy" {
-  source                    = "./modules/autoscaling"
-  min_capacity              = 2
-  max_capacity              = 10
-  target_resource_id        = "service/${aws_ecs_cluster.carshub_cluster.name}/${module.carshub_frontend_ecs.name}"
-  target_scalable_dimension = "ecs:service:DesiredCount"
-  target_service_namespace  = "ecs"
+  source             = "./modules/autoscaling"
+  min_capacity       = 2
+  max_capacity       = 10
+  resource_id        = "service/${module.carshub_cluster.cluster_name}/${module.carshub_cluster.services["ecs-frontend"].name}"
+  scalable_dimension = "ecs:service:DesiredCount"
+  service_namespace  = "ecs"
   policies = [
     {
-      name                    = "autoscaling-policy"
-      adjustment_type         = "ChangeInCapacity"
-      cooldown                = 60
-      metric_aggregation_type = "Average"
-      steps = [
-        {
-          metric_interval_lower_bound = 0
-          metric_interval_upper_bound = 20
-          scaling_adjustment          = 1
-        },
-        {
-          metric_interval_lower_bound = 20
-          scaling_adjustment          = 2
-        }
-      ]
+      name        = "worker-scale-up"
+      policy_type = "TargetTrackingScaling"
+      step_scaling_policy_configuration = {
+        adjustment_type          = "ChangeInCapacity"
+        cooldown                 = 60
+        metric_aggregation_type  = "Average"
+        min_adjustment_magnitude = 1
+        step_adjustment = [
+          {
+            metric_interval_lower_bound = 0
+            metric_interval_upper_bound = 20
+            scaling_adjustment          = 1
+          },
+          {
+            metric_interval_lower_bound = 20
+            scaling_adjustment          = 2
+          }
+        ]
+      }
     }
   ]
 }
@@ -235,6 +303,7 @@ module "ecs" {
       }
       subnet_ids                    = module.vpc.private_subnets
       vpc_id                        = module.vpc.vpc_id
+      security_group_ids            = [module.ecs_sg.id]
       availability_zone_rebalancing = "ENABLED"
     }    
   }
